@@ -3,6 +3,18 @@ import csv
 import requests
 import json
 import time
+import logging
+
+
+logging.basicConfig(
+    filename='web_crawler.log',
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S',
+    encoding='utf-8'
+)
+
+
 
 # 初始化 GitHub API (需申請 personal access token)
 # Justin Chien : web crewler use
@@ -132,6 +144,103 @@ da_list = {
     "newshelper-safari" : "yllan",
 }
 
+def process_contributor(contributor, repo_name, owner, repo_data, writer):
+    """Process a single contributor and write their data to CSV"""
+    logging.info(f"Processing contributor {contributor['login']} for {owner}/{repo_name}")
+    
+    # Get contributor details
+    user_info = get_user_info(contributor['login'])
+    if not user_info:
+        logging.warning(f"Could not get user info for {contributor['login']}")
+    
+    contribution_stats = get_user_contributions(owner, repo_name, contributor['login'])
+    if not contribution_stats:
+        logging.warning(f"Could not get contribution stats for {contributor['login']} in {owner}/{repo_name}")
+    
+    # Prepare data for CSV
+    row_data = {
+        # Repo 資訊
+        'repo': repo_name,
+        'owner': owner,
+        'repo_url': f"https://github.com/{owner}/{repo_name}",
+        'repo_description': repo_data.get('description', ''),
+        'repo_stars': repo_data.get('stargazers_count', 0),
+        'repo_forks': repo_data.get('forks_count', 0),
+        
+        # 貢獻者基本資訊
+        'contributor': contributor['login'],
+        'contributions': contributor['contributions'],
+        'contributor_url': contributor.get('html_url', ''),
+        'contributor_avatar_url': contributor.get('avatar_url', ''),
+        
+        # 貢獻者個人資料
+        'contributor_name': user_info.get('name', '') if user_info else '',
+        'contributor_company': user_info.get('company', '') if user_info else '',
+        'contributor_location': user_info.get('location', '') if user_info else '',
+        'contributor_email': user_info.get('email', '') if user_info else '',
+        'contributor_bio': user_info.get('bio', '') if user_info else '',
+        'contributor_blog': user_info.get('blog', '') if user_info else '',
+        'contributor_twitter': user_info.get('twitter_username', '') if user_info else '',
+        'contributor_created_at': user_info.get('created_at', '') if user_info else '',
+        'contributor_updated_at': user_info.get('updated_at', '') if user_info else '',
+        
+        # 貢獻者統計資料
+        'contributor_public_repos': user_info.get('public_repos', 0) if user_info else 0,
+        'contributor_public_gists': user_info.get('public_gists', 0) if user_info else 0,
+        'contributor_followers': user_info.get('followers', 0) if user_info else 0,
+        'contributor_following': user_info.get('following', 0) if user_info else 0,
+        
+        # 詳細貢獻資料
+        'total_commits': contribution_stats.get('total', 0) if contribution_stats else 0,
+        'total_additions': contribution_stats.get('weeks', [{}])[-1].get('a', 0) if contribution_stats else 0,
+        'total_deletions': contribution_stats.get('weeks', [{}])[-1].get('d', 0) if contribution_stats else 0,
+        
+        # 狀態
+        'status': 'success'
+    }
+    
+    writer.writerow(row_data)
+    logging.info(f"Successfully processed contributor {contributor['login']} for {owner}/{repo_name}")
+
+def process_repo(repo_name, owner, writer):
+    """Process a single repository and its contributors"""
+    logging.info(f"Processing repository {repo_name} with owner {owner}")
+    
+    # Check if repo exists
+    exists, repo_data = get_repo_info(owner, repo_name)
+    if not exists:
+        logging.warning(f"Repository {owner}/{repo_name} not found")
+        writer.writerow({
+            'repo': repo_name,
+            'owner': owner,
+            'repo_url': f"https://github.com/{owner}/{repo_name}",
+            'status': 'not_found'
+        })
+        return False
+    
+    logging.info(f"Found repository {owner}/{repo_name}")
+    
+    # Get contributors
+    contributors = get_contributors(owner, repo_name)
+    if not contributors:
+        logging.error(f"Could not get contributors for {owner}/{repo_name}")
+        writer.writerow({
+            'repo': repo_name,
+            'owner': owner,
+            'repo_url': f"https://github.com/{owner}/{repo_name}",
+            'status': 'error_getting_contributors'
+        })
+        return False
+    
+    logging.info(f"Found {len(contributors)} contributors for {owner}/{repo_name}")
+    
+    # Process each contributor
+    for contributor in contributors:
+        process_contributor(contributor, repo_name, owner, repo_data, writer)
+    
+    return True
+
+# Main processing loop
 with open('contributors.csv', 'w', newline='', encoding='utf-8') as f:
     writer = csv.DictWriter(f, fieldnames=[
         # Repo 資訊
@@ -152,156 +261,45 @@ with open('contributors.csv', 'w', newline='', encoding='utf-8') as f:
     ])
     writer.writeheader()
     
-    for repo_name, owner in da_list.items():
-        # 處理特殊情況
-        if owner == "":  # 空字串表示不需要 username
+    # Read repo list from file
+    repo_list = []
+    with open('repo_list.txt', 'r', encoding='utf-8') as f:
+        for line in f:
+            if ' - ' in line:
+                repo_name = line.split(' - ')[0].strip()
+                repo_list.append(repo_name)
+    
+    logging.info(f" *** Starting to process {len(repo_list)} repositories *** ")
+    
+    # Process all repos
+    for idx, repo_name in enumerate(repo_list):
+        logging.info(f" ---- Processing repository {idx + 1}/{len(repo_list)}: {repo_name} ---- ")
+        
+        # Check if repo has special handling in da_list
+        owner = da_list.get(repo_name, 'g0v')
+        
+        # Handle special cases
+        if owner == "":  # Empty string means no username needed
             url = f"https://github.com/{repo_name}"
-            print(f"跳過 {repo_name} (特殊 URL: {url})")
-            writer.writerow({
-                'repo': repo_name,
-                'owner': '',
-                'repo_url': url,
-                'status': 'special_url'
-            })
+            logging.info(f"{repo_name} - (特殊 URL: {url})")
             continue
-            
-        # 處理多個 owner 的情況
+        
+        # Process multiple owners if needed
         owners = [owner] if not isinstance(owner, list) else owner
         found = False
         
         for current_owner in owners:
-            # 先檢查 repo 是否存在
-            exists, repo_data = get_repo_info(current_owner, repo_name)
-            if exists:
-                print(f"找到 {current_owner}/{repo_name}")
+            logging.info(f"Trying owner {current_owner} for {repo_name}")
+            if process_repo(repo_name, current_owner, writer):
                 found = True
-                
-                # 獲取貢獻者列表
-                contributors = get_contributors(current_owner, repo_name)
-                if contributors:
-                    for contributor in contributors:
-                        # 獲取貢獻者詳細資訊
-                        user_info = get_user_info(contributor['login'])
-                        # 獲取詳細貢獻資料
-                        contribution_stats = get_user_contributions(current_owner, repo_name, contributor['login'])
-                        
-                        writer.writerow({
-                            # Repo 資訊
-                            'repo': repo_name,
-                            'owner': current_owner,
-                            'repo_url': f"https://github.com/{current_owner}/{repo_name}",
-                            'repo_description': repo_data.get('description', ''),
-                            'repo_stars': repo_data.get('stargazers_count', 0),
-                            'repo_forks': repo_data.get('forks_count', 0),
-                            
-                            # 貢獻者基本資訊
-                            'contributor': contributor['login'],
-                            'contributions': contributor['contributions'],
-                            'contributor_url': contributor.get('html_url', ''),
-                            'contributor_avatar_url': contributor.get('avatar_url', ''),
-                            
-                            # 貢獻者個人資料
-                            'contributor_name': user_info.get('name', '') if user_info else '',
-                            'contributor_company': user_info.get('company', '') if user_info else '',
-                            'contributor_location': user_info.get('location', '') if user_info else '',
-                            'contributor_email': user_info.get('email', '') if user_info else '',
-                            'contributor_bio': user_info.get('bio', '') if user_info else '',
-                            'contributor_blog': user_info.get('blog', '') if user_info else '',
-                            'contributor_twitter': user_info.get('twitter_username', '') if user_info else '',
-                            'contributor_created_at': user_info.get('created_at', '') if user_info else '',
-                            'contributor_updated_at': user_info.get('updated_at', '') if user_info else '',
-                            
-                            # 貢獻者統計資料
-                            'contributor_public_repos': user_info.get('public_repos', 0) if user_info else 0,
-                            'contributor_public_gists': user_info.get('public_gists', 0) if user_info else 0,
-                            'contributor_followers': user_info.get('followers', 0) if user_info else 0,
-                            'contributor_following': user_info.get('following', 0) if user_info else 0,
-                            
-                            # 詳細貢獻資料
-                            'total_commits': contribution_stats.get('total', 0) if contribution_stats else 0,
-                            'total_additions': contribution_stats.get('weeks', [{}])[-1].get('a', 0) if contribution_stats else 0,
-                            'total_deletions': contribution_stats.get('weeks', [{}])[-1].get('d', 0) if contribution_stats else 0,
-                            
-                            # 狀態
-                            'status': 'success'
-                        })
-                    break
-                else:
-                    print(f"無法獲取 {current_owner}/{repo_name} 的貢獻者資訊")
-                    writer.writerow({
-                        'repo': repo_name,
-                        'owner': current_owner,
-                        'repo_url': f"https://github.com/{current_owner}/{repo_name}",
-                        'status': 'error_getting_contributors'
-                    })
+                break
         
         if not found:
-            # 嘗試使用 g0v 作為 owner
-            exists, repo_data = get_repo_info('g0v', repo_name)
-            if exists:
-                print(f"在 g0v 組織中找到 {repo_name}")
-                contributors = get_contributors('g0v', repo_name)
-                if contributors:
-                    for contributor in contributors:
-                        user_info = get_user_info(contributor['login'])
-                        contribution_stats = get_user_contributions('g0v', repo_name, contributor['login'])
-                        
-                        writer.writerow({
-                            # Repo 資訊
-                            'repo': repo_name,
-                            'owner': 'g0v',
-                            'repo_url': f"https://github.com/g0v/{repo_name}",
-                            'repo_description': repo_data.get('description', ''),
-                            'repo_stars': repo_data.get('stargazers_count', 0),
-                            'repo_forks': repo_data.get('forks_count', 0),
-                            
-                            # 貢獻者基本資訊
-                            'contributor': contributor['login'],
-                            'contributions': contributor['contributions'],
-                            'contributor_url': contributor.get('html_url', ''),
-                            'contributor_avatar_url': contributor.get('avatar_url', ''),
-                            
-                            # 貢獻者個人資料
-                            'contributor_name': user_info.get('name', '') if user_info else '',
-                            'contributor_company': user_info.get('company', '') if user_info else '',
-                            'contributor_location': user_info.get('location', '') if user_info else '',
-                            'contributor_email': user_info.get('email', '') if user_info else '',
-                            'contributor_bio': user_info.get('bio', '') if user_info else '',
-                            'contributor_blog': user_info.get('blog', '') if user_info else '',
-                            'contributor_twitter': user_info.get('twitter_username', '') if user_info else '',
-                            'contributor_created_at': user_info.get('created_at', '') if user_info else '',
-                            'contributor_updated_at': user_info.get('updated_at', '') if user_info else '',
-                            
-                            # 貢獻者統計資料
-                            'contributor_public_repos': user_info.get('public_repos', 0) if user_info else 0,
-                            'contributor_public_gists': user_info.get('public_gists', 0) if user_info else 0,
-                            'contributor_followers': user_info.get('followers', 0) if user_info else 0,
-                            'contributor_following': user_info.get('following', 0) if user_info else 0,
-                            
-                            # 詳細貢獻資料
-                            'total_commits': contribution_stats.get('total', 0) if contribution_stats else 0,
-                            'total_additions': contribution_stats.get('weeks', [{}])[-1].get('a', 0) if contribution_stats else 0,
-                            'total_deletions': contribution_stats.get('weeks', [{}])[-1].get('d', 0) if contribution_stats else 0,
-                            
-                            # 狀態
-                            'status': 'success'
-                        })
-                else:
-                    print(f"無法獲取 g0v/{repo_name} 的貢獻者資訊")
-                    writer.writerow({
-                        'repo': repo_name,
-                        'owner': 'g0v',
-                        'repo_url': f"https://github.com/g0v/{repo_name}",
-                        'status': 'error_getting_contributors'
-                    })
-            else:
-                print(f"找不到 {repo_name} (嘗試過 {', '.join(owners)} 和 g0v)")
-                writer.writerow({
-                    'repo': repo_name,
-                    'owner': '',
-                    'repo_url': '',
-                    'status': 'not_found'
-                })
+            logging.info(f"Trying g0v organization for {repo_name}")
+            process_repo(repo_name, 'g0v', writer)
         
-        # 添加延遲以避免觸發 GitHub API 限制
+        # Add delay to avoid GitHub API rate limits
         time.sleep(1)
+        logging.info(f"Completed processing repository {repo_name}")
+
+logging.info(" *** Finished processing all repositories *** ")
