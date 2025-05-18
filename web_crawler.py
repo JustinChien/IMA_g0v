@@ -18,56 +18,101 @@ logging.basicConfig(
 
 # 初始化 GitHub API (需申請 personal access token)
 # Justin Chien : web crewler use
-g = Github("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")
+GITHUB_TOKEN = "placeholder"
+g = Github(GITHUB_TOKEN)
 
 def get_repo_info(owner, repo):
     """使用 GitHub API 獲取 repo 資訊"""
     url = f"https://api.github.com/repos/{owner}/{repo}"
     headers = {
-        'Authorization': f'token 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',
+        'Authorization': f'token {GITHUB_TOKEN}',
         'Accept': 'application/vnd.github.v3+json'
     }
-    response = requests.get(url, headers=headers)
-    return response.status_code == 200, response.json() if response.status_code == 200 else None
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return True, response.json()
+        elif response.status_code == 404:
+            logging.warning(f"Repository {owner}/{repo} not found")
+            return False, None
+        else:
+            logging.error(f"Error accessing {owner}/{repo}: Status code {response.status_code}")
+            logging.error(f"Response: {response.text}")
+            return False, None
+    except Exception as e:
+        logging.error(f"Exception while accessing {owner}/{repo}: {str(e)}")
+        return False, None
 
 def get_contributors(owner, repo):
     """獲取 repo 的貢獻者資訊"""
     url = f"https://api.github.com/repos/{owner}/{repo}/contributors"
     headers = {
-        'Authorization': f'token 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',
+        'Authorization': f'token {GITHUB_TOKEN}',
         'Accept': 'application/vnd.github.v3+json'
     }
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        return response.json()
-    return None
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 404:
+            logging.warning(f"No contributors found for {owner}/{repo}")
+            return None
+        else:
+            logging.error(f"Error getting contributors for {owner}/{repo}: Status code {response.status_code}")
+            logging.error(f"Response: {response.text}")
+            return None
+    except Exception as e:
+        logging.error(f"Exception while getting contributors for {owner}/{repo}: {str(e)}")
+        return None
 
 def get_user_info(username):
     """獲取用戶詳細資訊"""
     url = f"https://api.github.com/users/{username}"
     headers = {
-        'Authorization': f'token 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',
+        'Authorization': f'token {GITHUB_TOKEN}',
         'Accept': 'application/vnd.github.v3+json'
     }
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        return response.json()
-    return None
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 404:
+            logging.warning(f"User {username} not found")
+            return None
+        else:
+            logging.error(f"Error getting user info for {username}: Status code {response.status_code}")
+            logging.error(f"Response: {response.text}")
+            return None
+    except Exception as e:
+        logging.error(f"Exception while getting user info for {username}: {str(e)}")
+        return None
 
 def get_user_contributions(owner, repo, username):
     """獲取用戶在特定 repo 的詳細貢獻資訊"""
     url = f"https://api.github.com/repos/{owner}/{repo}/stats/contributors"
     headers = {
-        'Authorization': f'token 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',
+        'Authorization': f'token {GITHUB_TOKEN}',
         'Accept': 'application/vnd.github.v3+json'
     }
-    response = requests.get(url, headers=headers)
-    if response.status_code == 200:
-        data = response.json()
-        for contributor in data:
-            if contributor['author']['login'] == username:
-                return contributor
-    return None
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            data = response.json()
+            for contributor in data:
+                if contributor['author']['login'] == username:
+                    return contributor
+            logging.warning(f"No contribution data found for {username} in {owner}/{repo}")
+            return None
+        elif response.status_code == 404:
+            logging.warning(f"No contribution stats found for {owner}/{repo}")
+            return None
+        else:
+            logging.error(f"Error getting contribution stats for {owner}/{repo}: Status code {response.status_code}")
+            logging.error(f"Response: {response.text}")
+            return None
+    except Exception as e:
+        logging.error(f"Exception while getting contribution stats for {owner}/{repo}: {str(e)}")
+        return None
 
 da_list = {
     "hackfoldr-2.0" : "hackfoldr",
@@ -202,14 +247,39 @@ def process_contributor(contributor, repo_name, owner, repo_data, writer):
     writer.writerow(row_data)
     logging.info(f"Successfully processed contributor {contributor['login']} for {owner}/{repo_name}")
 
+def verify_repository(owner, repo):
+    """Verify if a repository exists and is accessible"""
+    url = f"https://api.github.com/repos/{owner}/{repo}"
+    headers = {
+        'Authorization': f'token {GITHUB_TOKEN}',
+        'Accept': 'application/vnd.github.v3+json'
+    }
+    try:
+        response = requests.get(url, headers=headers)
+        if response.status_code == 200:
+            return True, response.json()
+        elif response.status_code == 404:
+            logging.warning(f"Repository {owner}/{repo} does not exist")
+            return False, None
+        elif response.status_code == 401:
+            logging.error("Authentication failed. Please check your GitHub token.")
+            return False, None
+        else:
+            logging.error(f"Error accessing {owner}/{repo}: Status code {response.status_code}")
+            logging.error(f"Response: {response.text}")
+            return False, None
+    except Exception as e:
+        logging.error(f"Exception while verifying {owner}/{repo}: {str(e)}")
+        return False, None
+
 def process_repo(repo_name, owner, writer):
     """Process a single repository and its contributors"""
     logging.info(f"Processing repository {repo_name} with owner {owner}")
     
-    # Check if repo exists
-    exists, repo_data = get_repo_info(owner, repo_name)
+    # First verify if the repository exists
+    exists, repo_data = verify_repository(owner, repo_name)
     if not exists:
-        logging.warning(f"Repository {owner}/{repo_name} not found")
+        logging.warning(f"Repository {owner}/{repo_name} not found or not accessible")
         writer.writerow({
             'repo': repo_name,
             'owner': owner,
